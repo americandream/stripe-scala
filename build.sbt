@@ -4,18 +4,16 @@ version := io.Source.fromFile("VERSION").mkString.trim
 
 organization := "com.stripe"
 
-scalaVersion := "2.9.1"
-
-crossScalaVersions := Seq("2.9.0", "2.9.0-1", "2.9.1")
-
-scalacOptions ++= Seq("-unchecked", "-deprecation")
+scalaVersion := "2.10.0"
 
 libraryDependencies ++= Seq(
-  "org.apache.httpcomponents" % "httpclient" % "[4.1, 4.2)",
-  "net.liftweb" %% "lift-json" % "2.4-M4",
-  "org.scalatest" %% "scalatest" % "1.6.1" % "test"
+  "org.apache.httpcomponents" % "httpclient" % "[4.1, 4.2)" % "provided",
+  "org.json4s" %% "json4s-native" % "3.1.0",
+  "play" %% "play" % "2.1.0" % "provided",
+  "org.scalatest" %% "scalatest" % "2.0.M5b" % "test"
 )
 
+scalacOptions ++= "-deprecation" :: "-unchecked" :: "-language:implicitConversions" :: Nil           
 
 publishTo <<= version { v: String =>
   val nexus = "https://oss.sonatype.org/"
@@ -49,6 +47,11 @@ pomExtra := (
       <id>siddarth</id>
       <name>Siddarth Chandrasekaran</name>
       <url>https://stripe.com/about#siddarth</url>
+    </developer>
+    <developer>
+       <id>jasong</id>
+       <name>Jason Gilanfarr</name>
+       <email>jason.gilanfarr@gmail.com</email>
     </developer>
   </developers>
 )

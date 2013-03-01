@@ -3,305 +3,318 @@ package com.stripe
 import org.scalatest.FunSuite
 import org.scalatest.matchers.ShouldMatchers
 import java.util.UUID
+import com.stripe.model._
+import org.scalatest.WordSpec
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.duration._
+import scala.concurrent.Future
+import scala.concurrent.Await
+import com.stripe.play.PlayHttpClient
+import com.stripe.apachehttp.ApacheHttpClient
+import org.scalatest.FunSpec
 
-trait StripeSuite extends ShouldMatchers {
+class StripeSuite extends WordSpec with StripeApiBehaviors {
+  "Stripe APIs" when {
+    "driven by Play! WS" should {
+      com.stripe.api = new StripeApi with PlayHttpClient
+      behave like allSuites
+    }
+    "driven by apache http" should {
+      com.stripe.api = new StripeApi with ApacheHttpClient
+      behave like allSuites
+    }
+  }
+}
+
+trait StripeApiBehaviors extends ShouldMatchers {
+  this: WordSpec =>
   //set the stripe API key
   apiKey = "tGN0bIwXnHdwOa85VABjPdSn8nWY7G7I"
 
-  val DefaultCardMap = Map(
-    "name" -> "Scala User",
-    "cvc" -> "100",
-    "address_line1" -> "12 Main Street",
-    "address_line2" -> "Palo Alto",
-    "address_zip" -> "94105",
-    "address_country" -> "USA",
-    "number" -> "4242424242424242",
-    "exp_month" -> 3,
-    "exp_year" -> 2015)
+  val defaultTimeout = 5.minutes
 
-  val DefaultChargeMap = Map("amount" -> 100, "currency" -> "usd", "card" -> DefaultCardMap)
+  val defaultCard = ChargeCard(name = Some("Scala User"),
+    cvc = Some(100),
+    addressLine1 = Some("12 Main Street"),
+    addressLine2 = Some("Palo Alto"),
+    addressZip = Some("94105"),
+    addressCountry = Some("USA"),
+    number = "4242424242424242",
+    expMonth = 3,
+    expYear = 2015)
 
-  val DefaultCustomerMap = Map("description" -> "Scala Customer", "card" -> DefaultCardMap)
-
-  val DefaultPlanMap = Map("amount" -> 100, "currency" -> "usd", "interval" -> "month", "name" -> "Scala Plan")
-
-  def getUniquePlanId(): String = return "PLAN-%s".format(UUID.randomUUID())
-
-  def getUniquePlanMap(): Map[String,_] = return DefaultPlanMap + ("id" -> getUniquePlanId())
-
-  val DefaultInvoiceItemMap = Map("amount" -> 100, "currency" -> "usd")
-
-  def getUniqueCouponMap(): Map[String,_] = Map("id" -> "COUPON-%s".format(UUID.randomUUID()),
-    "duration" -> "once",
-    "percent_off" -> 10
-  )
-}
-
-class ChargeSuite extends FunSuite with StripeSuite {
-  test("Charges can be created") {
-    val charge = Charge.create(Map("amount" -> 100, "currency" -> "usd", "card" -> DefaultCardMap))
-    charge.refunded should be (false)
+  def resultOf[T](f: Future[T]): T = {
+    Await.result(f, defaultTimeout)
   }
 
-  test("Charges can be retrieved individually") {
-    val createdCharge = Charge.create(DefaultChargeMap)
-    val retrievedCharge = Charge.retrieve(createdCharge.id)
-    createdCharge.created should equal (retrievedCharge.created)
+  def uniquePlan() = Plan(id = s"PLAN-${UUID.randomUUID}", amount = 100, currency = "usd", interval = "month", name = "Scala Plan")
+
+  def uniqueCoupon = Coupon(id = Some(s"COUPON-${UUID.randomUUID}"),
+    duration = "once",
+    percentOff = Some(10))
+
+  val defaultInvoiceItem = InvoiceItem(amount = 100, currency = "usd")
+
+  def allSuites {
+    chargeSuite
+    customerSuite
+    planSuite
+    invoiceItemSuite
+    invoiceSuite
+    tokenSuite
+    accountSuite
+    couponSuite
   }
 
-  test("Charges can be refunded") {
-    val charge = Charge.create(DefaultChargeMap)
-    val refundedCharge = charge.refund()
-    refundedCharge.refunded should equal (true)
-  }
-
-  test("Charges can be listed") {
-    val charge = Charge.create(DefaultChargeMap)
-    val charges = Charge.all().data
-    charges.head.isInstanceOf[Charge] should be (true)
-  }
-
-  test("Invalid card raises CardException") {
-    val e = intercept[CardException] {
-      Charge.create(Map(
-        "amount" -> 100,
-        "currency" -> "usd",
-        "card" -> Map("number" -> "4242424242424241", "exp_month" -> 3, "exp_year" -> 2015)
-      ))
+  def chargeSuite {
+    "have Charges that" should {
+      "be createable" in {
+        val charge = resultOf(Charge.create(amount = 100, currency = "usd", card = Some(defaultCard)))
+        charge.refunded should be(false)
+      }
+      "be retrievable individually" in {
+        val createdCharge = resultOf(Charge.create(amount = 100, currency = "usd", card = Some(defaultCard)))
+        val retrievedCharge = resultOf(Charge.get(createdCharge.id))
+        createdCharge should equal(retrievedCharge)
+      }
+      "be refundable" in {
+        val charge = resultOf(Charge.create(amount = 100, currency = "usd", card = Some(defaultCard)))
+        val refundedCharge = resultOf(charge.refund())
+        refundedCharge.refunded should equal(true)
+      }
+      "be listable" in {
+        val charge = resultOf(Charge.create(amount = 100, currency = "usd", card = Some(defaultCard)))
+        val charges = resultOf(Charge.all())
+        charges.headOption should be('defined)
+      }
+      "raise CardException for an invalid card" in {
+        val e = intercept[CardException] {
+          resultOf(Charge.create(amount = 100,
+            currency = "usd", card = Some(defaultCard.copy(number = "4242424242424241"))))
+        }
+        e.param.get should equal("number")
+      }
+      "pass CVC, address, and zip checks in testmode" in {
+        val charge = resultOf(Charge.create(amount = 100, currency = "usd", card = Some(defaultCard)))
+        charge.card.cvcCheck.get should equal("pass")
+        charge.card.addressLine1Check.get should equal("pass")
+        charge.card.addressZipCheck.get should equal("pass")
+      }
     }
-    e.param.get should equal ("number")
   }
 
-  test("CVC, address and zip checks should pass in testmode") {
-    val charge = Charge.create(DefaultChargeMap)
-    charge.card.cvcCheck.get should equal ("pass")
-    charge.card.addressLine1Check.get should equal ("pass")
-    charge.card.addressZipCheck.get should equal ("pass")
-  }
-}
-
-class CustomerSuite extends FunSuite with StripeSuite {
-  test("Customers can be created") {
-    val customer = Customer.create(DefaultCustomerMap + ("description" -> "Test Description"))
-    customer.description.get should be ("Test Description")
-    customer.activeCard.isEmpty should be (false)
-  }
-
-  test("Customers can be retrieved individually") {
-    val createdCustomer = Customer.create(DefaultCustomerMap)
-    val retrievedCustomer = Customer.retrieve(createdCustomer.id)
-    createdCustomer.created should equal (retrievedCustomer.created)
-  }
-
-  test("Customers can be updated") {
-    val customer = Customer.create(DefaultCustomerMap)
-    val updatedCustomer = customer.update(Map("description" -> "Updated Scala Customer"))
-    updatedCustomer.description.get should equal ("Updated Scala Customer")
-  }
-
-  test("Customers can be deleted") {
-    val customer = Customer.create(DefaultCustomerMap)
-    val deletedCustomer = customer.delete()
-    deletedCustomer.deleted should be (true)
-    deletedCustomer.id should equal (customer.id)
-  }
-
-  test("Customers can be listed") {
-    val customer = Customer.create(DefaultCustomerMap)
-    val customers = Customer.all().data
-    customers.head.isInstanceOf[Customer] should be (true)
-  }
-}
-
-class PlanSuite extends FunSuite with StripeSuite {
-  test("Plans can be created") {
-    val plan = Plan.create(getUniquePlanMap + ("interval" -> "year"))
-    plan.interval should equal ("year")
+  def customerSuite {
+    "have Customers that" should {
+      "be creatable" in {
+        val customer = resultOf(Customer.create(card = Some(defaultCard),
+          description = Some("Test Description")))
+        customer.description.get should be("Test Description")
+        customer.activeCard should be('defined)
+      }
+      "be retrievable individually" in {
+        val customer = resultOf(Customer.create(card = Some(defaultCard),
+          description = Some("Test Description")))
+        val retrievedCustomer = resultOf(Customer.get(customer.id))
+        retrievedCustomer should equal(customer)
+      }
+      "be updateable" in {
+        val customer = resultOf(Customer.create(card = Some(defaultCard),
+          description = Some("Test Description")))
+        val updatedCustomer = resultOf(customer.update(description = Some("Updated Scala Customer")))
+        updatedCustomer.description.get should equal("Updated Scala Customer")
+      }
+      "be deleteable" in {
+        val customer = resultOf(Customer.create(card = Some(defaultCard),
+          description = Some("Test Description")))
+        val deletedCustomer = resultOf(customer.delete())
+        deletedCustomer.deleted should be(true)
+        deletedCustomer.id should equal(customer.id)
+      }
+      "be listable" in {
+        val customer = resultOf(Customer.create(card = Some(defaultCard),
+          description = Some("Test Description")))
+        val customers = resultOf(Customer.all())
+        customers.headOption should be('defined)
+      }
+    }
   }
 
-  test("Plans can be retrieved individually") {
-    val createdPlan = Plan.create(getUniquePlanMap)
-    val retrievedPlan = Plan.retrieve(createdPlan.id)
-    createdPlan should equal (retrievedPlan)
+  def planSuite {
+    "have Plans that" should {
+      "be createable" in {
+        val plan = resultOf(Plan.create(uniquePlan.copy(interval = "year")))
+        plan.interval should equal("year")
+      }
+      "be retrieveable individually" in {
+        val plan = resultOf(Plan.create(uniquePlan))
+        val retrievedPlan = resultOf(Plan.get(plan.id))
+        retrievedPlan should equal(plan)
+      }
+      "be deleteable" in {
+        val plan = resultOf(Plan.create(uniquePlan))
+        val deletedPlan = resultOf(plan.delete)
+        deletedPlan.deleted should be(true)
+        deletedPlan.id should equal(plan.id)
+      }
+      "be listable" in {
+        val plan = resultOf(Plan.create(uniquePlan))
+        val plans = resultOf(Plan.all())
+        plans.headOption should be('defined)
+      }
+    }
+    "have Customers that" should {
+      "be creatable with a plan" in {
+        val plan = resultOf(Plan.create(uniquePlan))
+        val customer = resultOf(Customer.create(card = Some(defaultCard), plan = Some(plan.id)))
+        customer.subscription.get.plan.id should equal(plan.id)
+      }
+      "be addable to a customer without a plan" in {
+        val customer = resultOf(Customer.create(card = Some(defaultCard)))
+        val plan = resultOf(Plan.create(uniquePlan))
+        val subscription = resultOf(customer.updateSubscription(plan = plan.id))
+        subscription.customer should equal(customer.id)
+        subscription.plan.id should equal(plan.id)
+      }
+      "override an existing plan" in {
+        val origPlan = resultOf(Plan.create(uniquePlan))
+        val customer = resultOf(Customer.create(card = Some(defaultCard), plan = Some(origPlan.id)))
+        customer.subscription.get.plan.id should equal(origPlan.id)
+        val newPlan = resultOf(Plan.create(uniquePlan))
+        val subscription = resultOf(customer.updateSubscription(newPlan.id))
+        val updatedCustomer = resultOf(Customer.get(customer.id))
+        updatedCustomer.subscription.get.plan.id should equal(newPlan.id)
+      }
+      "be able to cancel subscriptions" in {
+        val plan = resultOf(Plan.create(uniquePlan))
+        val customer = resultOf(Customer.create(card = Some(defaultCard), plan = Some(plan.id)))
+        customer.subscription.get.status should equal("active")
+        val cancelledSubscription = resultOf(customer.cancelSubscription())
+        cancelledSubscription.status should be("canceled")
+      }
+    }
   }
 
-  test("Plans can be deleted") {
-    val plan = Plan.create(getUniquePlanMap)
-    val deletedPlan = plan.delete()
-    deletedPlan.deleted should be (true)
-    deletedPlan.id should equal (plan.id)
+  def invoiceItemSuite {
+    def createDefaultInvoiceItem(): InvoiceItem = {
+      val customer = resultOf(Customer.create(card = Some(defaultCard)))
+      return resultOf(InvoiceItem.create(customer, defaultInvoiceItem))
+    }
+    "have Invoice Items that" should {
+      "be creatable" in {
+        val createdItem = createDefaultInvoiceItem()
+        createdItem.id should be('defined)
+        val retrievedInvoiceItem = resultOf(InvoiceItem.get(createdItem.id.get))
+        createdItem should equal(retrievedInvoiceItem)
+      }
+      "be updateable" in {
+        val item = createDefaultInvoiceItem()
+        val updated = resultOf(item.update(amount = Some(200), description = Some("Updated Invoice")))
+        updated.amount should equal(200)
+        updated.description should equal(Some("Updated Invoice"))
+      }
+      "be deleteable" in {
+        val item = createDefaultInvoiceItem()
+        val deleted = resultOf(item.delete())
+        deleted.deleted should be(true)
+        deleted.id should equal(item.id.get)
+      }
+      "be listable" in {
+        val invoiceItem = createDefaultInvoiceItem()
+        val invoiceItems = resultOf(InvoiceItem.all())
+        invoiceItems.headOption should be('defined)
+      }
+    }
   }
 
-  test("Plans can be listed") {
-    val plan = Plan.create(getUniquePlanMap)
-    val plans = Plan.all().data
-    plans.head.isInstanceOf[Plan] should be (true)
+  def invoiceSuite {
+    "have Invoices that" should {
+      "be createable and retrievable" in {
+        val customer = resultOf(Plan.create(uniquePlan).flatMap { plan =>
+          Customer.create(card = Some(defaultCard), plan = Some(plan.id))
+        })
+        val invoices = resultOf(Invoice.all())
+        val createdInvoice = invoices.head
+        val retrievedInvoice = resultOf(Invoice.get(createdInvoice.id.get))
+        retrievedInvoice.id should equal(createdInvoice.id)
+        createdInvoice.id should be('defined)
+      }
+      "be listable" in {
+        val customer = resultOf(Plan.create(uniquePlan).flatMap { plan =>
+          Customer.create(card = Some(defaultCard), plan = Some(plan.id))
+        })
+        val invoices = resultOf(Invoice.all())
+        invoices.headOption should be('defined)
+      }
+      "be looked up for a customer" in {
+        val plan = resultOf(Plan.create(uniquePlan.copy(intervalCount = 2)))
+        val customer = resultOf(Customer.create(card = Some(defaultCard)))
+        resultOf(customer.updateSubscription(plan.id))
+        val invoices = resultOf(Invoice.all(customer = Some(customer)))
+        val invoice = invoices.head
+        invoice.customer should equal(customer.id)
+      }
+      "be able to find upcoming invoices" in {
+        val customer = resultOf(Customer.create(card = Some(defaultCard)))
+        val invoiceItem = resultOf(InvoiceItem.create(customer, defaultInvoiceItem))
+        val upcomingInvoice = resultOf(Invoice.upcoming(customer))
+        upcomingInvoice.amountDue should equal(defaultInvoiceItem.amount)
+      }
+    }
   }
 
-  test("Customers can be created with a plan") {
-    val plan = Plan.create(getUniquePlanMap)
-    val customer = Customer.create(DefaultCustomerMap + ("plan" -> plan.id))
-    customer.subscription.get.plan.id should equal (plan.id)
+  def tokenSuite {
+    "has Tokens that" should {
+      "be createable" in {
+        val token = resultOf(Token.create(defaultCard))
+        token.used should be(false)
+      }
+      "be retrievable" in {
+        val token = resultOf(Token.create(defaultCard))
+        val retrievedToken = resultOf(Token.get(token.id))
+        retrievedToken should equal(token)
+      }
+      "be usable" in {
+        val token = resultOf(Token.create(defaultCard))
+        token.used should be(false)
+        val charge = resultOf(Charge.create(amount = 100, currency = "usd", cardToken = Some(token)))
+        val retrievedToken = resultOf(Token.get(token.id))
+        retrievedToken.used should equal(true)
+      }
+    }
   }
 
-  test("A plan can be added to a customer without a plan") {
-    val customer = Customer.create(DefaultCustomerMap)
-    val plan = Plan.create(getUniquePlanMap)
-    val subscription = customer.updateSubscription(Map("plan" -> plan.id))
-    subscription.customer should equal (customer.id)
-    subscription.plan.id should equal (plan.id)
+  def accountSuite {
+    "have Account that" should {
+      "be retrieved" in {
+        val account = resultOf(Account.get())
+        account.email should equal(Some("test+bindings@stripe.com"))
+        account.chargeEnabled should equal(false)
+        account.detailsSubmitted should equal(false)
+        account.statementDescriptor should be(None)
+        account.currenciesSupported.length should be(1)
+        account.currenciesSupported.head should be("USD")
+      }
+    }
   }
 
-  test("A customer's existing plan can be replaced") {
-    val origPlan = Plan.create(getUniquePlanMap)
-    val customer = Customer.create(DefaultCustomerMap + ("plan" -> origPlan.id))
-    customer.subscription.get.plan.id should equal (origPlan.id)
-    val newPlan = Plan.create(getUniquePlanMap)
-    val subscription = customer.updateSubscription(Map("plan" -> newPlan.id))
-    val updatedCustomer = Customer.retrieve(customer.id)
-    updatedCustomer.subscription.get.plan.id should equal (newPlan.id)
-  }
-
-  test("Customer subscriptions can be canceled") {
-    val plan = Plan.create(getUniquePlanMap)
-    val customer = Customer.create(DefaultCustomerMap + ("plan" -> plan.id))
-    customer.subscription.get.status should equal ("active")
-    val canceledSubscription = customer.cancelSubscription()
-    canceledSubscription.status should be ("canceled")
-  }
-}
-
-class InvoiceItemSuite extends FunSuite with StripeSuite {
-  def createDefaultInvoiceItem(): InvoiceItem = {
-    val customer = Customer.create(DefaultCustomerMap)
-    return InvoiceItem.create(DefaultInvoiceItemMap + ("customer" -> customer.id))
-  }
-
-  test("InvoiceItems can be created") {
-    val invoiceItem = createDefaultInvoiceItem()
-    invoiceItem.date should be > (0L)
-  }
-
-  test("InvoiceItems can be retrieved individually") {
-    val createdInvoiceItem = createDefaultInvoiceItem()
-    val retrievedInvoiceItem = InvoiceItem.retrieve(createdInvoiceItem.id)
-    createdInvoiceItem.date should equal (retrievedInvoiceItem.date)
-  }
-
-  test("InvoiceItems can be updated") {
-    val invoiceItem = createDefaultInvoiceItem()
-    val updatedInvoiceItem = invoiceItem.update(Map(
-      "amount" -> 200, "description" -> "Updated Scala InvoiceItem"
-    ))
-    updatedInvoiceItem.amount should equal (200)
-    updatedInvoiceItem.description.get should equal ("Updated Scala InvoiceItem")
-  }
-
-  test("InvoiceItems can be deleted") {
-    val invoiceItem = createDefaultInvoiceItem()
-    val deletedInvoiceItem = invoiceItem.delete()
-    deletedInvoiceItem.deleted should be (true)
-    deletedInvoiceItem.id should equal (invoiceItem.id)
-  }
-
-  test("InvoiceItems can be listed") {
-    val invoiceItem = createDefaultInvoiceItem()
-    val invoiceItems = InvoiceItem.all().data
-    invoiceItems.head.isInstanceOf[InvoiceItem] should be (true)
-  }
-}
-
-class InvoiceSuite extends FunSuite with StripeSuite {
-  test("Invoices can be retrieved individually") {
-    val plan = Plan.create(getUniquePlanMap)
-    val customer = Customer.create(DefaultCustomerMap + ("plan" -> plan.id))
-    val invoices = Invoice.all(Map("customer" -> customer.id)).data
-    val createdInvoice = invoices.head
-    val retrievedInvoice = Invoice.retrieve(createdInvoice.id.get)
-    retrievedInvoice.id should equal (createdInvoice.id)
-  }
-
-  test("Invoices can be listed") {
-    val plan = Plan.create(getUniquePlanMap)
-    val customer = Customer.create(DefaultCustomerMap + ("plan" -> plan.id))
-    val invoices = Invoice.all().data
-    invoices.head.isInstanceOf[Invoice] should be (true)
-  }
-
-  test("Invoices can be retrieved for a customer") {
-    val plan = Plan.create(getUniquePlanMap)
-    val customer = Customer.create(DefaultCustomerMap + ("plan" -> plan.id))
-    val invoices = Invoice.all(Map("customer" -> customer.id)).data
-    val invoice = invoices.head
-    invoice.customer should equal (customer.id)
-    val invoiceLineSubscription = invoice.lines.subscriptions.head
-    invoiceLineSubscription.plan.id should equal (plan.id)
-  }
-
-  test("Upcoming Invoices can be retrieved") {
-    val customer = Customer.create(DefaultCustomerMap)
-    val customerId = customer.id
-    val invoiceItem = InvoiceItem.create(DefaultInvoiceItemMap + ("customer" -> customerId))
-    val upcomingInvoice = Invoice.upcoming(Map("customer" -> customerId))
-//    upcomingInvoice.attempted should be (false)
-  }
-}
-
-class TokenSuite extends FunSuite with StripeSuite {
-  test("Tokens can be created") {
-    val token = Token.create(Map("card" -> DefaultCardMap))
-    token.used should be (false)
-  }
-
-  test("Tokens can be retrieved") {
-    val createdToken = Token.create(Map("card" -> DefaultCardMap))
-    val retrievedToken = Token.retrieve(createdToken.id)
-    createdToken.created should equal (retrievedToken.created)
-  }
-
-  test("Tokens can be used") {
-    val createdToken = Token.create(Map("card" -> DefaultCardMap))
-    createdToken.used should be (false)
-    val charge = Charge.create(Map("amount" -> 100, "currency" -> "usd", "card" -> createdToken.id))
-    val retrievedToken = Token.retrieve(createdToken.id)
-    retrievedToken.used should equal (true)
-  }
-}
-
-class CouponSuite extends FunSuite with StripeSuite {
-  test("Coupons can be created") {
-    val coupon = Coupon.create(getUniqueCouponMap)
-    coupon.percentOff should equal (10)
-  }
-
-  test("Coupons can be retrieved individually") {
-    val createdCoupon = Coupon.create(getUniqueCouponMap)
-    val retrievedCoupon = Coupon.retrieve(createdCoupon.id)
-    createdCoupon should equal (retrievedCoupon)
-  }
-
-  test("Coupons can be deleted") {
-    val coupon = Coupon.create(getUniqueCouponMap)
-    val deletedCoupon = coupon.delete()
-    deletedCoupon.deleted should be (true)
-    deletedCoupon.id should equal (coupon.id)
-  }
-
-  test("Coupons can be listed") {
-    val coupon = Coupon.create(getUniqueCouponMap)
-    val coupons = Coupon.all().data
-    coupons.head.isInstanceOf[Coupon] should be (true)
-  }
-}
-
-class AccountSuite extends FunSuite with StripeSuite {
-  test("Account can be retrieved") {
-    val account = Account.retrieve
-    account.email should equal (Some("test+bindings@stripe.com"))
-    account.chargeEnabled should equal (false)
-    account.detailsSubmitted should be (false)
-    account.statementDescriptor should be (None)
-    account.currenciesSupported.length should be (1)
-    account.currenciesSupported.head should be ("USD")
+  def couponSuite {
+    "have Coupons that" should {
+      "be able to be created and retrieved" in {
+        val createdCoupon = resultOf(Coupon.create(uniqueCoupon))
+        val retrievedCoupon = resultOf(Coupon.get(createdCoupon.id.get))
+        createdCoupon should equal(retrievedCoupon)
+      }
+      "be deletable" in {
+        val coupon = resultOf(Coupon.create(uniqueCoupon))
+        val deletedCoupon = resultOf(coupon.delete())
+        deletedCoupon.deleted should be(true)
+        deletedCoupon.id should equal(coupon.id.get)
+      }
+      "be listed" in {
+        val coupon = resultOf(Coupon.create(uniqueCoupon))
+        val coupons = resultOf(Coupon.all())
+        coupons.headOption should be('defined)
+      }
+    }
   }
 }

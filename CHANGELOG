@@ -1,3 +1,22 @@
+=== 1.2 2013-02-28
+
+* Move models to model package
+* Remove model inheritance on StripeApi 
+* Move to scala 2.10 exclusively
+* Change the API to be asynchronous and driven by scala.concurrent.Future
+* Rename APIResource to StripeApi
+* Factor out HttpClient from StripeApi so that alternative implementations may be used
+* Introduce a Play2HttpClient
+* Refactor apache http out of StripeApi and into HttpClient
+* Change 'retrieve' to 'get'
+* Move to scalatest2 and use wordspecs with behavior testing so the same tests can be shared across clients
+* Update the readme.
+* Cleanup the model classes and try to be closer to the stripe api
+* Make all the model calls use Option and classes instead of passing maps around.
+* Move to json4s which is lift's json extracted out of lift.
+* Remove cross compiling builds - Future isn't supported in 2.9 with the same API as 2.10 (which is much better)
+
+
 === 1.1.2 2012-08-15
 
 * Add new com.stripe.Account API Resource.
